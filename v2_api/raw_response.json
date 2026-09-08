@@ -1,0 +1,17 @@
+{
+  "data": {
+    "symbol": "NDX",
+    "summaryData": {
+      "CurrentPrice": {"label": "Current Value", "value": "29,308.86"},
+      "NetChangePercentageChange": {"label": "Net Change / %", "value": "95.7/0.33%"},
+      "PreviousClose": {"label": "Previous Close", "value": "29,213.16"},
+      "TodaysHigh": {"label": "Today's High", "value": "29,405.12"},
+      "TodaysLow": {"label": "Today's Low", "value": "29,142.44"}
+    },
+    "assetClass": "INDEX",
+    "additionalData": null,
+    "bidAsk": null
+  },
+  "message": null,
+  "status": {"rCode": 200, "bCodeMessage": null, "developerMessage": null}
+}
