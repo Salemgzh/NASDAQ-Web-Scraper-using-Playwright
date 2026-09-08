@@ -1,113 +1,91 @@
-# Nasdaq-100 Index Quote Scraper
+# Nasdaq-100 Index Data Scraper
 
-A small Playwright-based scraper that renders the Nasdaq-100 quotes page (a JavaScript-heavy site) and saves the fully rendered HTML plus a full-page screenshot for inspection or downstream parsing.
+A small Python project that evolved from browser-based scraping to direct API extraction of Nasdaq-100 (NDX) data.
 
-## Problem
+## Evolution
 
-The [Nasdaq-100 quotes page](https://www.nasdaq.com/market-activity/quotes/nasdaq-ndx-index) renders its data table client-side with JavaScript. A plain HTTP request (e.g. `requests.get()`) only returns the initial skeleton HTML — the table of symbols, prices, and percentage changes is never present in the response, making the page impossible to scrape with simple request-based tools.
+This repository intentionally keeps the two approaches as distinct stages rather than presenting the final implementation as if it appeared fully formed.
 
-## Solution
+### v1 — Playwright rendering
 
-This script uses **Playwright** to drive a real (headless) Firefox browser, load the page, wait for the JavaScript to finish rendering the quote table, and then capture:
+The first implementation used Playwright with headless Firefox to load Nasdaq's JavaScript-heavy quote page and save the rendered HTML and a screenshot. The original implementation and captured artifacts are preserved under `v1_playwright/`.
 
-1. The fully rendered DOM as static HTML.
-2. A full-page screenshot of the rendered page.
+The key lesson from v1 was that the visible quote table was populated by a runtime web component. Saving `page.content()` did not provide a reliable structured-data source for downstream parsing.
 
-Both artifacts can then be parsed offline (e.g. with `pandas.read_html()` or `lxml`) without needing to keep re-launching a browser.
+### v2 — API pivot
 
-## Features
+The second implementation moved to the JSON endpoint used by Nasdaq's frontend:
 
-- Headless Firefox automation via Playwright's sync API
-- Custom desktop User-Agent string to reduce the chance of being served a bot-blocked/blank page
-- Explicit wait (`page.wait_for_timeout`) to allow client-side rendering to complete after `domcontentloaded`
-- Saves rendered output as:
-  - `playwright.html` — full page source, UTF-8 encoded
-  - `screenshot.png` — full-page (not just viewport) screenshot
-- Minimal dependencies, single-file script
+`https://api.nasdaq.com/api/quote/NDX/summary?assetclass=INDEX`
 
-## Installation
+Instead of launching a browser, v2 requests the JSON directly, extracts `data.summaryData`, cleans it with Pandas, adds a UTC scrape timestamp, and writes a CSV. This removes the browser dependency and turns the scraper into an explicit fetch → extract → clean → save pipeline.
+
+## Repository layout
+
+```text
+.
+├── v1_playwright/
+│   ├── scrapy.py
+│   ├── playwright.html
+│   └── screenshot.png
+│
+└── v2_api/
+    ├── scrapy.py
+    ├── requirements.txt
+    ├── raw_response.json
+    └── nasdaq_ndx_clean.csv
+```
+
+## Running v1
 
 ```bash
-# 1. Create and activate a virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-
-# 2. Install Python dependencies
 pip install playwright pandas lxml
-
-# 3. Install the Playwright browser binaries
 playwright install firefox
+python v1_playwright/scrapy.py
 ```
 
-## Example
+v1 is retained as a historical/reference implementation.
 
-Run the scraper directly:
+## Running v2
 
 ```bash
-python scrapy.py
+pip install -r v2_api/requirements.txt
+python v2_api/scrapy.py
 ```
 
-```python
-import pandas as pd
-import lxml
-from playwright.sync_api import sync_playwright
+The API implementation writes its output beside the script and records the raw response before transforming it.
 
-url = "https://www.nasdaq.com/market-activity/quotes/nasdaq-ndx-index"
+## v2 pipeline
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/127.0.0.0 Safari/537.36"
-)
-
-with sync_playwright() as p:
-    browser = p.firefox.launch(headless=True)
-    context = browser.new_context(user_agent=USER_AGENT)
-    page = context.new_page()
-
-    page.goto(url, wait_until="domcontentloaded", timeout=50000)
-    page.wait_for_timeout(5000)  # let JS finish rendering
-
-    content = page.content()
-    with open("playwright.html", "w", encoding="utf-8") as file:
-        file.write(content)
-
-    page.screenshot(path="screenshot.png", full_page=True)
-    browser.close()
+```text
+Nasdaq JSON API
+      ↓
+ raw_response.json
+      ↓
+ data.summaryData
+      ↓
+ Pandas DataFrame
+      ↓
+ cleaning + type conversion
+      ↓
+ nasdaq_ndx_clean.csv
 ```
 
-To turn the saved HTML into a DataFrame afterward:
+The script is configured near the top of `v2_api/scrapy.py` with `SYMBOL` and `ASSET_CLASS`, so the same pattern can be adapted to other Nasdaq instruments where the endpoint supports them.
 
-```python
-import pandas as pd
+## What changed
 
-tables = pd.read_html("playwright.html")
-df = tables[0]   # adjust index to match the quotes table
-print(df.head())
-```
+| | v1 | v2 |
+|---|---|---|
+| Acquisition | Playwright + Firefox | `requests` |
+| Source | Rendered Nasdaq page | Nasdaq JSON API |
+| Main artifact | Rendered HTML + screenshot | Raw JSON + cleaned CSV |
+| Structured extraction | Not reliable from saved DOM | `data.summaryData` |
+| Browser dependency | Required | Not required |
+| Data processing | Manual/offline follow-up | Pandas pipeline |
 
-## Screenshot
+## Notes
 
-`screenshot.png` is a full-page capture of the rendered Nasdaq-100 quotes page, including the symbol/name/market cap/last sale/net change/percentage change table for all index constituents (AAPL through XEL), the cookie consent banner, and the page footer.
+Nasdaq can change its frontend, API behavior, response schema, or access controls. The v1 implementation is kept because it documents the original problem-solving path; v2 is the current implementation.
 
-## Output
-
-Running the script produces two files in the working directory:
-
-| File | Description |
-|---|---|
-| `playwright.html` | Full rendered HTML (~2,300 lines / ~310 KB) of the quotes page, including the complete data table markup |
-| `screenshot.png` | Full-page PNG screenshot (~700 KB) of the same rendered page |
-
-The HTML contains a `<table>` with columns: **Symbol, Name, Market Cap, Last Sale, Net Change, Percentage Change**, along with a timestamp footer (e.g. "Aug 18, 2026 12:16 PM") indicating when the quotes were last updated.
-
-## Limitations
-
-- **Fixed wait, not a real readiness check**: the 5-second `wait_for_timeout` is a guess. On a slow connection the table may not have finished loading; on a fast one, time is wasted. A more robust approach would wait for a specific selector (e.g. the table element) to appear.
-- **No error handling**: navigation timeouts, missing selectors, or a changed page layout will raise unhandled exceptions and halt the script.
-- **Cookie consent banner not dismissed**: the screenshot and HTML include the "Accept All Cookies" overlay, which can obscure content in the screenshot and may interfere with table parsing if not filtered out.
-- **Fragile to site changes**: Nasdaq can change its DOM structure, table layout, or add stronger bot detection at any time, breaking parsing or blocking the request entirely.
-- **No rate limiting / retry logic**: repeated runs in quick succession may trigger rate limiting or IP-based blocking.
-- **Single page only**: the script scrapes one fixed URL; it isn't parameterized for other tickers, indices, or pagination.
-- **Data staleness**: prices are a snapshot at scrape time (e.g. "Aug 18, 2026 12:16 PM" in this run) and are not live/real-time beyond that moment.
-- **Legal/ToS considerations**: scraping Nasdaq.com may be subject to their Terms of Service; this script is intended for personal/educational use, not redistribution or commercial use of the data.
+Use the scraper responsibly and check Nasdaq's applicable terms before using retrieved data beyond personal or educational purposes.
